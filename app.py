@@ -47,38 +47,59 @@ def login_page():
 # -----------------------------
 def dashboard():
     page = render_sidebar()
-    st.title("🏠 DocuMind Dashboard")
 
     username = get_current_user()
 
-    st.success(f"Welcome, {username}!")
+    if page == "🏠 Dashboard":
+        st.title("🏠 DocuMind Dashboard")
 
-    st.write("Your DocuMind workspace is ready.")
+        st.success(f"Welcome, {username}!")
 
-    col1, col2, col3 = st.columns(3)
+        col1, col2, col3 = st.columns(3)
 
-    with col1:
-        st.metric("Documents", "0")
+        with col1:
+            st.metric("Documents", "0")
 
-    with col2:
-        st.metric("Questions", "0")
+        with col2:
+            st.metric("Questions", "0")
 
-    with col3:
-        st.metric("Sources", "0")
+        with col3:
+            st.metric("Sources", "0")
+
+        st.divider()
+
+        st.subheader("Get started")
+
+        st.info(
+            "Upload a document or paste text to start building your "
+            "AI-powered knowledge base."
+        )
+
+    elif page == "📄 Documents":
+        st.title("📄 Documents")
+
+        st.info("Document upload system coming next.")
+
+    elif page == "💬 AI Chat":
+        st.title("💬 AI Chat")
+
+        st.info("AI chat system coming soon.")
+
+    elif page == "📊 Analytics":
+        st.title("📊 Analytics")
+
+        st.info("Analytics system coming soon.")
+
+    elif page == "⚙️ Settings":
+        st.title("⚙️ Settings")
+
+        st.info("Application settings coming soon.")
 
     st.divider()
-
-    st.subheader("Get started")
-
-    st.info(
-        "Upload a document or paste text to start building your "
-        "AI-powered knowledge base."
-    )
 
     if st.button("Logout"):
         logout_user()
         st.rerun()
-
 
 # -----------------------------
 # Application router
