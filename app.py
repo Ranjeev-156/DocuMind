@@ -1,5 +1,12 @@
-from src.ui import render_sidebar
 import streamlit as st
+
+from src.auth.auth import (
+    get_current_user,
+    is_logged_in,
+    login_user,
+    logout_user,
+)
+from src.ui import render_sidebar
 
 # -----------------------------
 # Page configuration
@@ -12,11 +19,6 @@ st.set_page_config(
 )
 
 
-# -----------------------------
-# Session state
-# -----------------------------
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
 
 
 # -----------------------------
@@ -33,8 +35,8 @@ def login_page():
 
     if st.button("Login", type="primary"):
         if username and password:
-            st.session_state.logged_in = True
-            st.session_state.username = username
+            login_user(username)
+            st.rerun()
             st.rerun()
         else:
             st.error("Please enter both username and password.")
@@ -47,7 +49,7 @@ def dashboard():
     page = render_sidebar()
     st.title("🏠 DocuMind Dashboard")
 
-    username = st.session_state.get("username", "User")
+    username = get_current_user()
 
     st.success(f"Welcome, {username}!")
 
@@ -74,14 +76,14 @@ def dashboard():
     )
 
     if st.button("Logout"):
-        st.session_state.clear()
+        logout_user()
         st.rerun()
 
 
 # -----------------------------
 # Application router
 # -----------------------------
-if st.session_state.logged_in:
+if is_logged_in():
     dashboard()
 else:
     login_page()
