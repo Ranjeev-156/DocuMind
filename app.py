@@ -1,5 +1,5 @@
 from src.documents.extractor import extract_document
-
+from src.rag.ingest import ingest_document
 
 from src.documents.loader import (
     get_file_size_mb,
@@ -57,12 +57,10 @@ def login_page():
 # -----------------------------
 def dashboard():
     page = render_sidebar()
-
     username = get_current_user()
 
     if page == "🏠 Dashboard":
         st.title("🏠 DocuMind Dashboard")
-
         st.success(f"Welcome, {username}!")
 
         col1, col2, col3 = st.columns(3)
@@ -81,112 +79,145 @@ def dashboard():
         st.subheader("Get started")
 
         st.info(
-            "Upload a document or paste text to start building your "
-            "AI-powered knowledge base."
+            "Upload a document or paste text to start building "
+            "your AI-powered knowledge base."
         )
 
     elif page == "📄 Documents":
         st.title("📄 Documents")
+        st.write(
+            "Upload documents to build your knowledge base."
+        )
 
-    st.write("Upload documents to build your knowledge base.")
+        uploaded_files = st.file_uploader(
+            "Choose documents",
+            type=["pdf", "txt", "md", "csv", "xlsx"],
+            accept_multiple_files=True,
+            help=(
+                f"Maximum {MAX_FILES} files, "
+                f"{MAX_FILE_MB} MB per file."
+            ),
+        )
 
-    uploaded_files = st.file_uploader(
-        "Choose documents",
-        type=["pdf", "txt", "md", "csv", "xlsx"],
-        accept_multiple_files=True,
-        help=f"Maximum {MAX_FILES} files, {MAX_FILE_MB} MB per file.",
-    )
-
-    if uploaded_files:
-
-        if len(uploaded_files) > MAX_FILES:
-            st.error(
-                f"You selected {len(uploaded_files)} files. "
-                f"The maximum allowed is {MAX_FILES}."
-            )
-            uploaded_files = uploaded_files[:MAX_FILES]
-
-        st.success(f"{len(uploaded_files)} document(s) selected.")
-
-        for uploaded_file in uploaded_files:
-
-            file_size_mb = get_file_size_mb(
-                uploaded_file.getvalue()
-            )
-
-            col1, col2, col3 = st.columns([3, 1, 1])
-
-            with col1:
-                st.write(f"📄 **{uploaded_file.name}**")
-
-            with col2:
-                st.write(f"{file_size_mb:.2f} MB")
-
-            with col3:
-                st.write(get_file_type(uploaded_file.name))
-
-            if file_size_mb > MAX_FILE_MB:
+        if uploaded_files:
+            if len(uploaded_files) > MAX_FILES:
                 st.error(
-                    f"File is too large. Maximum size is "
-                    f"{MAX_FILE_MB} MB."
+                    f"You selected {len(uploaded_files)} files. "
+                    f"The maximum allowed is {MAX_FILES}."
+                )
+                uploaded_files = uploaded_files[:MAX_FILES]
+
+            st.success(
+                f"{len(uploaded_files)} document(s) selected."
+            )
+
+            for uploaded_file in uploaded_files:
+
+                file_size_mb = get_file_size_mb(
+                    uploaded_file.getvalue()
                 )
 
-            elif not is_supported_file(uploaded_file.name):
-                st.error("Unsupported file type.")
+                col1, col2, col3 = st.columns(
+                    [3, 1, 1]
+                )
 
-            else:
-                st.success("✓ File accepted")
+                with col1:
+                    st.write(
+                        f"📄 **{uploaded_file.name}**"
+                    )
 
-                if st.button(
-                    f"Extract text from {uploaded_file.name}",
-                    key=f"extract_{uploaded_file.name}",
+                with col2:
+                    st.write(
+                        f"{file_size_mb:.2f} MB"
+                    )
+
+                with col3:
+                    st.write(
+                        get_file_type(
+                            uploaded_file.name
+                        )
+                    )
+
+                if file_size_mb > MAX_FILE_MB:
+                    st.error(
+                        f"File is too large. Maximum size "
+                        f"is {MAX_FILE_MB} MB."
+                    )
+
+                elif not is_supported_file(
+                    uploaded_file.name
                 ):
-                    try:
-                        file_bytes = uploaded_file.getvalue()
+                    st.error(
+                        "Unsupported file type."
+                    )
 
-                        extracted_text = extract_document(
-                            uploaded_file.name,
-                            file_bytes,
-                        )
+                else:
+                    st.success("✓ File accepted")
 
-                        if extracted_text.strip():
-                            st.success(
-                                "Text extracted successfully."
+                    if st.button(
+                        f"Process {uploaded_file.name}",
+                        key=f"process_{uploaded_file.name}",
+                    ):
+                        try:
+                            file_bytes = (
+                                uploaded_file.getvalue()
                             )
 
-                            st.text_area(
-                                "Extracted text",
-                                extracted_text,
-                                height=300,
-                                key=f"text_{uploaded_file.name}",
-                            )
-                        else:
-                            st.warning(
-                                "No readable text was found "
-                                "in this document."
+                            extracted_text = (
+                                extract_document(
+                                    uploaded_file.name,
+                                    file_bytes,
+                                )
                             )
 
-                    except Exception as error:
-                        st.error(
-                            f"Could not extract this document: "
-                            f"{error}"
-                        )
+                            if not extracted_text.strip():
+                                st.warning(
+                                    "No readable text was "
+                                    "found in this document."
+                                )
 
-            
+                            else:
+                                chunk_count = (
+                                    ingest_document(
+                                        uploaded_file.name,
+                                        extracted_text,
+                                    )
+                                )
+
+                                st.success(
+                                    f"✓ {uploaded_file.name} "
+                                    "processed successfully!"
+                                )
+
+                                st.info(
+                                    f"Created and stored "
+                                    f"{chunk_count} document "
+                                    "chunk(s)."
+                                )
+
+                        except Exception as error:
+                            st.error(
+                                f"Could not process this "
+                                f"document: {error}"
+                            )
+
     elif page == "💬 AI Chat":
         st.title("💬 AI Chat")
-
-        st.info("AI chat system coming soon.")
+        st.info(
+            "AI chat system coming soon."
+        )
 
     elif page == "📊 Analytics":
         st.title("📊 Analytics")
-
-        st.info("Analytics system coming soon.")
+        st.info(
+            "Analytics system coming soon."
+        )
 
     elif page == "⚙️ Settings":
         st.title("⚙️ Settings")
-
-        st.info("Application settings coming soon.")
+        st.info(
+            "Application settings coming soon."
+        )
 
     st.divider()
 
