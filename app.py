@@ -1,3 +1,6 @@
+from src.documents.extractor import extract_document
+
+
 from src.documents.loader import (
     get_file_size_mb,
     get_file_type,
@@ -85,33 +88,33 @@ def dashboard():
     elif page == "📄 Documents":
         st.title("📄 Documents")
 
-        st.write("Upload documents to build your knowledge base.")
+    st.write("Upload documents to build your knowledge base.")
 
-        uploaded_files = st.file_uploader(
-            "Choose documents",
-            type=["pdf", "txt", "md", "csv", "xlsx"],
-            accept_multiple_files=True,
-            help=f"Maximum {MAX_FILES} files, {MAX_FILE_MB} MB per file.",
-        )
+    uploaded_files = st.file_uploader(
+        "Choose documents",
+        type=["pdf", "txt", "md", "csv", "xlsx"],
+        accept_multiple_files=True,
+        help=f"Maximum {MAX_FILES} files, {MAX_FILE_MB} MB per file.",
+    )
 
-        if uploaded_files:
+    if uploaded_files:
 
-            if len(uploaded_files) > MAX_FILES:
-                st.error(
-                    f"You selected {len(uploaded_files)} files. "
-                    f"The maximum allowed is {MAX_FILES}."
-                )
-                uploaded_files = uploaded_files[:MAX_FILES]
+        if len(uploaded_files) > MAX_FILES:
+            st.error(
+                f"You selected {len(uploaded_files)} files. "
+                f"The maximum allowed is {MAX_FILES}."
+            )
+            uploaded_files = uploaded_files[:MAX_FILES]
 
-                st.success(f"{len(uploaded_files)} document(s) selected.")
+        st.success(f"{len(uploaded_files)} document(s) selected.")
 
-            for uploaded_file in uploaded_files:
+        for uploaded_file in uploaded_files:
 
-                file_size_mb = get_file_size_mb(
-                    uploaded_file.getvalue()
-                )
+            file_size_mb = get_file_size_mb(
+                uploaded_file.getvalue()
+            )
 
-                col1, col2, col3 = st.columns([3, 1, 1])
+            col1, col2, col3 = st.columns([3, 1, 1])
 
             with col1:
                 st.write(f"📄 **{uploaded_file.name}**")
@@ -133,6 +136,43 @@ def dashboard():
 
             else:
                 st.success("✓ File accepted")
+
+                if st.button(
+                    f"Extract text from {uploaded_file.name}",
+                    key=f"extract_{uploaded_file.name}",
+                ):
+                    try:
+                        file_bytes = uploaded_file.getvalue()
+
+                        extracted_text = extract_document(
+                            uploaded_file.name,
+                            file_bytes,
+                        )
+
+                        if extracted_text.strip():
+                            st.success(
+                                "Text extracted successfully."
+                            )
+
+                            st.text_area(
+                                "Extracted text",
+                                extracted_text,
+                                height=300,
+                                key=f"text_{uploaded_file.name}",
+                            )
+                        else:
+                            st.warning(
+                                "No readable text was found "
+                                "in this document."
+                            )
+
+                    except Exception as error:
+                        st.error(
+                            f"Could not extract this document: "
+                            f"{error}"
+                        )
+
+            
     elif page == "💬 AI Chat":
         st.title("💬 AI Chat")
 
