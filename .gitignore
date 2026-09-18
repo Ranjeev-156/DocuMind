@@ -1,0 +1,28 @@
+# Virtual environment
+envir/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Environment variables
+.env
+.env.*
+
+# Local databases / vector stores
+chroma_db/
+*.db
+
+# Uploaded/generated files
+uploads/
+data/
+
+# VS Code
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
