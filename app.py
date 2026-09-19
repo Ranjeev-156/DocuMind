@@ -1,27 +1,37 @@
-import io
 import re
+
 import streamlit as st
 from streamlit_js_eval import streamlit_js_eval
+
 from src.workspace import (
     create_workspace,
     generate_workspace_id,
     get_workspace,
     workspace_exists,
 )
+
 from src.documents.extractor import extract_document
+
 from src.documents.loader import (
     get_file_size_mb,
     get_file_type,
     is_supported_file,
 )
+
 from src.rag.ingest import ingest_document
+
 from src.rag.vector_store import (
     delete_document,
     get_document_count,
     list_documents,
     search_documents,
 )
-from src.rag.generator import generate_answer
+
+from src.rag.generator import (
+    build_retrieval_query,
+    generate_answer,
+)
+
 from src.ui import render_sidebar
 from src.ui_effects import apply_ui_effects
 
@@ -32,54 +42,176 @@ from src.ui_effects import apply_ui_effects
 
 MAX_FILE_MB = 15
 MAX_FILES = 5
-# Fewer retrieved chunks keeps prompts small and answers faster.
-MAX_RESULTS = 3
+
+# Number of chunks retrieved for one question.
+MAX_RESULTS = 8
+
+# Maximum retrieved text sent to the AI.
+MAX_CONTEXT_CHARS = 24000
+
+# Maximum previous conversation sent to the AI.
+MAX_CONVERSATION_CHARS = 6000
 
 REMEMBER_WORKSPACE_KEY = "documind_remembered_workspace"
 
 
+# =========================================================
+# AI OPTIONS
+# =========================================================
+
+PROVIDER_SMART = "Smart Mode"
+PROVIDER_LOCAL = "Local AI — Llama 3.2"
+PROVIDER_OPENROUTER = "OpenRouter — Free"
+
+ANSWER_MODE_GROUNDED = "Grounded Mode"
+ANSWER_MODE_ADAPTIVE = "Adaptive Mode"
+
+
+PROVIDER_LABELS = {
+    PROVIDER_SMART: "⚡ Smart AI",
+    PROVIDER_LOCAL: "🖥️ Local AI — Llama 3.2",
+    PROVIDER_OPENROUTER: "☁️ OpenRouter — Free",
+}
+
+
+ANSWER_MODE_LABELS = {
+    ANSWER_MODE_GROUNDED: "📚 Grounded Mode",
+    ANSWER_MODE_ADAPTIVE: "🧠 Adaptive Mode",
+}
+
+
+# =========================================================
+# CONVERSATION CONTEXT
+# =========================================================
+
+def build_conversation_context(
+    chat_history,
+    max_chars=MAX_CONVERSATION_CHARS,
+):
+    """
+    Build a compact conversation context for follow-up
+    questions.
+
+    Example:
+
+    User: What is velocity?
+    Assistant: Velocity is...
+
+    User: Is it a vector quantity?
+
+    The generator can therefore understand that "it"
+    refers to velocity.
+    """
+
+    if not chat_history:
+        return ""
+
+    lines = []
+
+    # Use only the most recent messages.
+    recent_messages = chat_history[-8:]
+
+    for message in recent_messages:
+
+        role = message.get("role", "")
+        content = str(
+            message.get("content", "")
+        ).strip()
+
+        if not content:
+            continue
+
+        if role == "user":
+            label = "User"
+        elif role == "assistant":
+            label = "Assistant"
+        else:
+            continue
+
+        lines.append(
+            f"{label}: {content}"
+        )
+
+    conversation = "\n\n".join(lines).strip()
+
+    if len(conversation) > max_chars:
+        conversation = (
+            conversation[
+                -max_chars:
+            ]
+        )
+
+    return conversation
+
+
+# =========================================================
+# WORKSPACE MEMORY
+# =========================================================
+
 def get_remembered_workspace():
     """Read the remembered Workspace ID from this browser."""
+
     try:
         value = streamlit_js_eval(
-            js_expressions=f'localStorage.getItem("{REMEMBER_WORKSPACE_KEY}")',
+            js_expressions=(
+                f'localStorage.getItem("{REMEMBER_WORKSPACE_KEY}")'
+            ),
             want_output=True,
             key="read_remembered_workspace",
         )
+
         if value and str(value).strip():
             return str(value).strip()
+
     except Exception:
         pass
+
     return None
 
 
 def remember_workspace(workspace_id):
     """Store only the Workspace ID in browser localStorage."""
+
     if not workspace_id:
         return
-    safe_id = str(workspace_id).replace("\\", "\\\\").replace('"', '\\"')
+
+    safe_id = (
+        str(workspace_id)
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+    )
+
     try:
         streamlit_js_eval(
             js_expressions=(
-                f'localStorage.setItem("{REMEMBER_WORKSPACE_KEY}", "{safe_id}")'
+                f'localStorage.setItem('
+                f'"{REMEMBER_WORKSPACE_KEY}", '
+                f'"{safe_id}")'
             ),
             want_output=False,
             key="save_remembered_workspace",
         )
+
     except Exception:
         pass
 
 
 def forget_workspace():
     """Remove the remembered Workspace ID from this browser."""
+
     try:
         streamlit_js_eval(
-            js_expressions=f'localStorage.removeItem("{REMEMBER_WORKSPACE_KEY}")',
+            js_expressions=(
+                f'localStorage.removeItem('
+                f'"{REMEMBER_WORKSPACE_KEY}")'
+            ),
             want_output=False,
             key="forget_remembered_workspace",
         )
+
     except Exception:
         pass
+
 
 # =========================================================
 # PAGE CONFIGURATION
@@ -115,15 +247,35 @@ if "logged_out" not in st.session_state:
 # OPEN EXISTING WORKSPACE
 # =========================================================
 
-if st.session_state.workspace_id is None and not st.session_state.logged_out:
+if (
+    st.session_state.workspace_id is None
+    and not st.session_state.logged_out
+):
+
     remembered_id = get_remembered_workspace()
+
     if remembered_id:
-        remembered_data = get_workspace(remembered_id)
+
+        remembered_data = get_workspace(
+            remembered_id
+        )
+
         if remembered_data is not None:
-            st.session_state.workspace_id = remembered_id
+
+            st.session_state.workspace_id = (
+                remembered_id
+            )
+
             st.rerun()
+
         else:
+
             forget_workspace()
+
+
+# =========================================================
+# CREATE / OPEN WORKSPACE
+# =========================================================
 
 if st.session_state.workspace_id is None:
 
@@ -188,16 +340,15 @@ if st.session_state.workspace_id is None:
                 "Remember this workspace on this browser",
                 value=True,
                 help=(
-                    "Stores only the Workspace ID in this browser so "
-                    "you can reopen it automatically next time."
+                    "Stores only the Workspace ID in this "
+                    "browser so you can reopen it "
+                    "automatically next time."
                 ),
             )
 
             if not workspace_id:
 
-                generated_id = (
-                    generate_workspace_id()
-                )
+                generated_id = generate_workspace_id()
 
                 st.info(
                     f"💡 Suggested ID: `{generated_id}`"
@@ -224,7 +375,8 @@ if st.session_state.workspace_id is None:
                 elif workspace_id != workspace_id.lower():
 
                     st.error(
-                        "Please enter your Workspace ID using lowercase letters only. "
+                        "Please enter your Workspace ID "
+                        "using lowercase letters only. "
                         "Example: `ranjeev156`"
                     )
 
@@ -234,8 +386,9 @@ if st.session_state.workspace_id is None:
                 ):
 
                     st.error(
-                        "Workspace ID can contain only lowercase letters, "
-                        "numbers, and underscores."
+                        "Workspace ID can contain only "
+                        "lowercase letters, numbers, "
+                        "and underscores."
                     )
 
                 elif workspace_exists(
@@ -256,12 +409,20 @@ if st.session_state.workspace_id is None:
                             workspace_id,
                         )
 
-                        st.session_state.workspace_id = created_id
+                        st.session_state.workspace_id = (
+                            created_id
+                        )
+
                         st.session_state.logged_out = False
 
                         if remember_this_workspace:
-                            remember_workspace(created_id)
+
+                            remember_workspace(
+                                created_id
+                            )
+
                         else:
+
                             forget_workspace()
 
                         st.rerun()
@@ -299,23 +460,41 @@ if st.session_state.workspace_id is None:
                     )
 
                 else:
-                    # Use the same lookup function used after opening the workspace.
-                    # This avoids a mismatch where workspace_exists() says the ID exists
-                    # but get_workspace() uses slightly different matching/storage logic.
-                    existing_workspace = get_workspace(existing_id)
+
+                    existing_workspace = get_workspace(
+                        existing_id
+                    )
 
                     if existing_workspace is None:
+
                         st.error(
-                            "Workspace not found. Check the Workspace ID exactly as it was created."
+                            "Workspace not found. "
+                            "Check the Workspace ID exactly "
+                            "as it was created."
                         )
+
                     else:
-                        canonical_id = existing_workspace["workspace_id"]
-                        st.session_state.workspace_id = canonical_id
+
+                        canonical_id = (
+                            existing_workspace[
+                                "workspace_id"
+                            ]
+                        )
+
+                        st.session_state.workspace_id = (
+                            canonical_id
+                        )
+
                         st.session_state.logged_out = False
 
                         if remember_this_workspace:
-                            remember_workspace(canonical_id)
+
+                            remember_workspace(
+                                canonical_id
+                            )
+
                         else:
+
                             forget_workspace()
 
                         st.rerun()
@@ -333,18 +512,23 @@ workspace = get_workspace(
 
 if workspace is None:
 
-    # The workspace may have been deleted or its stored ID may be stale.
     forget_workspace()
+
     st.session_state.workspace_id = None
     st.session_state.logged_out = True
+
     st.error(
-        "This workspace could not be found. Please open it again with a valid Workspace ID."
+        "This workspace could not be found. "
+        "Please open it again with a valid Workspace ID."
     )
+
     st.stop()
 
 
 WORKSPACE_ID = workspace["workspace_id"]
 USER_NAME = workspace["name"]
+
+
 # =========================================================
 # SESSION STATE
 # =========================================================
@@ -354,6 +538,12 @@ if "chat_history" not in st.session_state:
 
 if "questions_count" not in st.session_state:
     st.session_state.questions_count = 0
+
+if "ai_provider" not in st.session_state:
+    st.session_state.ai_provider = PROVIDER_SMART
+
+if "answer_mode" not in st.session_state:
+    st.session_state.answer_mode = ANSWER_MODE_ADAPTIVE
 
 if "extracted_pdf_text" not in st.session_state:
     st.session_state.extracted_pdf_text = ""
@@ -378,10 +568,12 @@ if page == "🏠 Dashboard":
     st.title("📚 DocuMind AI")
 
     st.subheader(
-    f"Welcome back, {USER_NAME} 👋"
-)
+        f"Welcome back, {USER_NAME} 👋"
+    )
 
-    st.subheader("Intelligent Document Analytics")
+    st.subheader(
+        "Intelligent Document Analytics"
+    )
 
     st.write(
         "Understand, search and chat with your documents "
@@ -389,10 +581,6 @@ if page == "🏠 Dashboard":
     )
 
     st.divider()
-
-    # =====================================================
-    # GET STARTED
-    # =====================================================
 
     st.subheader("🚀 Get started")
 
@@ -402,7 +590,9 @@ if page == "🏠 Dashboard":
 
         with st.container(border=True):
 
-            st.markdown("### 📄 Add documents")
+            st.markdown(
+                "### 📄 Add documents"
+            )
 
             st.write(
                 "Upload documents and build your "
@@ -421,15 +611,17 @@ if page == "🏠 Dashboard":
             ):
 
                 st.info(
-                    "Open **📄 Documents** from the sidebar "
-                    "to upload your files."
+                    "Open **📄 Documents** from the "
+                    "sidebar to upload your files."
                 )
 
     with col2:
 
         with st.container(border=True):
 
-            st.markdown("### 💬 Ask your documents")
+            st.markdown(
+                "### 💬 Ask your documents"
+            )
 
             st.write(
                 "Ask questions and get answers based "
@@ -437,7 +629,7 @@ if page == "🏠 Dashboard":
             )
 
             st.caption(
-                "Answers are generated by Gemini."
+                "Choose Smart AI, Local AI, or OpenRouter Free."
             )
 
             if st.button(
@@ -447,17 +639,15 @@ if page == "🏠 Dashboard":
             ):
 
                 st.info(
-                    "Open **💬 AI Chat** from the sidebar "
-                    "to start asking questions."
+                    "Open **💬 AI Chat** from the "
+                    "sidebar to start asking questions."
                 )
-
-    # =====================================================
-    # PASTE YOUR TEXT
-    # =====================================================
 
     st.divider()
 
-    st.subheader("📋 Paste Your Text")
+    st.subheader(
+        "📋 Paste Your Text"
+    )
 
     with st.container(border=True):
 
@@ -503,7 +693,8 @@ if page == "🏠 Dashboard":
                     )
 
                     st.info(
-                        f"Created {chunk_count} document chunk(s)."
+                        f"Created {chunk_count} "
+                        "document chunk(s)."
                     )
 
                 except Exception as error:
@@ -512,15 +703,15 @@ if page == "🏠 Dashboard":
                         f"Could not add text: {error}"
                     )
 
-    # =====================================================
-    # WORKSPACE OVERVIEW
-    # =====================================================
-
     st.divider()
 
-    st.subheader("📊 Workspace")
+    st.subheader(
+        "📊 Workspace"
+    )
 
-    documents = list_documents(WORKSPACE_ID)
+    documents = list_documents(
+        WORKSPACE_ID
+    )
 
     col1, col2, col3 = st.columns(3)
 
@@ -535,7 +726,9 @@ if page == "🏠 Dashboard":
 
         st.metric(
             "Indexed Chunks",
-            get_document_count(WORKSPACE_ID),
+            get_document_count(
+                WORKSPACE_ID
+            ),
         )
 
     with col3:
@@ -552,7 +745,9 @@ if page == "🏠 Dashboard":
 
 elif page == "📄 Documents":
 
-    st.title("📄 Documents")
+    st.title(
+        "📄 Documents"
+    )
 
     st.write(
         "Upload documents or paste text into your "
@@ -561,11 +756,9 @@ elif page == "📄 Documents":
 
     st.divider()
 
-    # =====================================================
-    # DOCUMENT INPUT
-    # =====================================================
-
-    st.subheader("📄 Document Input")
+    st.subheader(
+        "📄 Document Input"
+    )
 
     uploaded_files = st.file_uploader(
         "Choose documents",
@@ -639,8 +832,9 @@ elif page == "📄 Documents":
                 if file_size_mb > MAX_FILE_MB:
 
                     st.error(
-                        f"File is too large. Maximum "
-                        f"size is {MAX_FILE_MB} MB."
+                        f"File is too large. "
+                        f"Maximum size is "
+                        f"{MAX_FILE_MB} MB."
                     )
 
                 elif not is_supported_file(
@@ -653,7 +847,9 @@ elif page == "📄 Documents":
 
                 else:
 
-                    st.success("✓ File accepted")
+                    st.success(
+                        "✓ File accepted"
+                    )
 
                     if st.button(
                         f"Process {uploaded_file.name}",
@@ -678,8 +874,9 @@ elif page == "📄 Documents":
                                 if not extracted_text.strip():
 
                                     st.warning(
-                                        "No readable text was "
-                                        "found in this document."
+                                        "No readable text "
+                                        "was found in this "
+                                        "document."
                                     )
 
                                 else:
@@ -709,31 +906,28 @@ elif page == "📄 Documents":
                                 f"{error}"
                             )
 
-    # =====================================================
-    # TEXT & PDF TOOLS
-    # =====================================================
-
     st.divider()
 
-    st.subheader("📋 Text & PDF Tools")
+    st.subheader(
+        "📋 Text & PDF Tools"
+    )
 
     tool_col1, tool_col2 = st.columns(2)
-
-    # -----------------------------------------------------
-    # PASTE TEXT TOOL
-    # -----------------------------------------------------
 
     with tool_col1:
 
         with st.container(border=True):
 
-            st.markdown("### 📋 Paste Your Text")
+            st.markdown(
+                "### 📋 Paste Your Text"
+            )
 
             tool_text = st.text_area(
                 "Paste your text...",
                 height=220,
                 placeholder=(
-                    "Paste notes, articles, study material..."
+                    "Paste notes, articles, "
+                    "study material..."
                 ),
                 key="document_tool_text",
             )
@@ -765,11 +959,13 @@ elif page == "📄 Documents":
                             "Adding text..."
                         ):
 
-                            chunk_count = ingest_document(
-                                WORKSPACE_ID,
-                                tool_text_name.strip()
-                                or "Pasted Text",
-                                tool_text,
+                            chunk_count = (
+                                ingest_document(
+                                    WORKSPACE_ID,
+                                    tool_text_name.strip()
+                                    or "Pasted Text",
+                                    tool_text,
+                                )
                             )
 
                         st.success(
@@ -783,12 +979,9 @@ elif page == "📄 Documents":
                     except Exception as error:
 
                         st.error(
-                            f"Could not add text: {error}"
+                            f"Could not add text: "
+                            f"{error}"
                         )
-
-    # -----------------------------------------------------
-    # PDF TEXT EXTRACTOR
-    # -----------------------------------------------------
 
     with tool_col2:
 
@@ -878,15 +1071,15 @@ elif page == "📄 Documents":
                     use_container_width=True,
                 )
 
-    # =====================================================
-    # DOCUMENT LIBRARY
-    # =====================================================
-
     st.divider()
 
-    st.subheader("📚 Document Library")
+    st.subheader(
+        "📚 Document Library"
+    )
 
-    documents = list_documents(WORKSPACE_ID)
+    documents = list_documents(
+        WORKSPACE_ID
+    )
 
     if not documents:
 
@@ -930,7 +1123,7 @@ elif page == "📄 Documents":
 
                             deleted = delete_document(
                                 WORKSPACE_ID,
-                                filename
+                                filename,
                             )
 
                             st.success(
@@ -942,7 +1135,8 @@ elif page == "📄 Documents":
                         except Exception as error:
 
                             st.error(
-                                f"Delete failed: {error}"
+                                f"Delete failed: "
+                                f"{error}"
                             )
 
 
@@ -952,13 +1146,28 @@ elif page == "📄 Documents":
 
 elif page == "💬 AI Chat":
 
-    st.title("💬 AI Chat")
+    st.title(
+        "💬 AI Chat"
+    )
 
     st.write(
-        "Ask questions about your documents."
+        "Ask questions, request explanations, "
+        "create notes, or control the answer format."
+    )
+
+    st.caption(
+        "Examples: "
+        "`Explain velocity in 200 words` • "
+        "`Make 5 exam-ready points on velocity` • "
+        "`Elaborate on velocity`"
     )
 
     st.divider()
+
+
+    # =====================================================
+    # CHAT HISTORY
+    # =====================================================
 
     if not st.session_state.chat_history:
 
@@ -969,16 +1178,21 @@ elif page == "💬 AI Chat":
             )
 
             st.write(
-                "Ask a question and DocuMind will "
-                "search your knowledge base before "
-                "asking Gemini to generate an answer."
+                "DocuMind finds relevant information from "
+                "your knowledge base and then uses the "
+                "selected Answer Mode to construct the answer."
+            )
+
+            st.info(
+                "💡 You can ask for a specific length, "
+                "number of points, exam-ready notes, "
+                "detailed explanations, summaries, "
+                "tables, or other formats."
             )
 
     else:
 
-        for message in (
-            st.session_state.chat_history
-        ):
+        for message in st.session_state.chat_history:
 
             with st.chat_message(
                 message["role"]
@@ -1008,19 +1222,176 @@ elif page == "💬 AI Chat":
                                 f"{source['chunk_index']}"
                             )
 
+
     if st.button(
         "🗑️ Clear Chat",
         key="clear_chat",
     ):
 
         st.session_state.chat_history = []
+
         st.rerun()
+
+
+    # =====================================================
+    # AI CONTROLS
+    # =====================================================
+
+    st.subheader(
+        "🤖 AI Controls"
+    )
+
+    control_col1, control_col2 = st.columns(2)
+
+
+    # =====================================================
+    # AI PROVIDER
+    # =====================================================
+
+    with control_col1:
+
+        st.markdown(
+            "#### AI Provider"
+        )
+
+        st.selectbox(
+            "Choose the AI provider",
+            [
+                PROVIDER_SMART,
+                PROVIDER_LOCAL,
+                PROVIDER_OPENROUTER,
+            ],
+            key="ai_provider",
+            format_func=lambda value: (
+                PROVIDER_LABELS.get(
+                    value,
+                    value,
+                )
+            ),
+            help=(
+                "Smart AI tries OpenRouter first and "
+                "automatically falls back to local "
+                "Llama 3.2 if OpenRouter is unavailable."
+            ),
+        )
+
+
+    # =====================================================
+    # ANSWER MODE
+    # =====================================================
+
+    with control_col2:
+
+        st.markdown(
+            "#### Answer Mode"
+        )
+
+        st.selectbox(
+            "Choose how answers should be produced",
+            [
+                ANSWER_MODE_GROUNDED,
+                ANSWER_MODE_ADAPTIVE,
+            ],
+            key="answer_mode",
+            format_func=lambda value: (
+                ANSWER_MODE_LABELS.get(
+                    value,
+                    value,
+                )
+            ),
+            help=(
+                "Grounded Mode stays strictly within the "
+                "retrieved documents. Adaptive Mode uses "
+                "the documents as the foundation and can "
+                "add general explanations when the retrieved "
+                "material is short."
+            ),
+        )
+
+
+    # =====================================================
+    # CURRENT SETTINGS DISPLAY
+    # =====================================================
+
+    provider = st.session_state.ai_provider
+    answer_mode = st.session_state.answer_mode
+
+    if provider == PROVIDER_SMART:
+
+        st.caption(
+            "⚡ **Smart AI:** OpenRouter first → "
+            "Local Llama 3.2 fallback."
+        )
+
+    elif provider == PROVIDER_LOCAL:
+
+        st.caption(
+            "🖥️ **Local AI:** Uses your local "
+            "Ollama `llama3.2:latest` model."
+        )
+
+    elif provider == PROVIDER_OPENROUTER:
+
+        st.caption(
+            "☁️ **OpenRouter:** Uses the configured "
+            "OpenRouter free-model route."
+        )
+
+
+    if answer_mode == ANSWER_MODE_GROUNDED:
+
+        st.info(
+            "📚 **Grounded Mode:** Answers are restricted "
+            "to information supported by your retrieved "
+            "knowledge-base content."
+        )
+
+    else:
+
+        st.info(
+            "🧠 **Adaptive Mode:** Your documents remain "
+            "the primary source. When the retrieved "
+            "information is short, the AI may use general "
+            "knowledge to explain or elaborate without "
+            "inventing document-specific facts."
+        )
+
+
+    st.divider()
+
+
+    # =====================================================
+    # QUESTION INPUT
+    # =====================================================
 
     question = st.chat_input(
         "Ask a question about your documents..."
     )
 
     if question:
+
+        question = question.strip()
+
+        if not question:
+            st.stop()
+
+
+        # =================================================
+        # BUILD PREVIOUS CONVERSATION CONTEXT
+        # =================================================
+
+        # Do this BEFORE saving the current question so
+        # the current question isn't duplicated.
+        conversation_context = (
+            build_conversation_context(
+                st.session_state.chat_history
+            )
+        )
+
+
+        # =================================================
+        # SAVE USER QUESTION
+        # =================================================
 
         st.session_state.chat_history.append(
             {
@@ -1029,51 +1400,178 @@ elif page == "💬 AI Chat":
             }
         )
 
+
         try:
 
+            # =================================================
+            # BUILD TOPIC-FOCUSED RETRIEVAL QUERY
+            # =================================================
+
+            search_query = build_retrieval_query(
+                question,
+                conversation_context,
+            )
+
+            if not search_query.strip():
+
+                search_query = question
+
+
+            # =================================================
+            # SEARCH DOCUMENTS
+            # =================================================
+
             with st.spinner(
-                "Searching your documents..."
+                "🔎 Searching your documents..."
             ):
 
                 results = search_documents(
                     WORKSPACE_ID,
-                    question,
+                    search_query,
                     n_results=MAX_RESULTS,
                 )
 
+
+            if not isinstance(
+                results,
+                dict,
+            ):
+
+                results = {}
+
+
             documents_found = results.get(
                 "documents",
-                [[]],
+                [],
             )
 
             metadatas_found = results.get(
                 "metadatas",
-                [[]],
+                [],
             )
 
+
+            # =================================================
+            # NORMALIZE DOCUMENT RESULTS
+            # =================================================
+
+            if (
+                documents_found
+                and isinstance(
+                    documents_found[0],
+                    list,
+                )
+            ):
+
+                retrieved_documents = (
+                    documents_found[0]
+                )
+
+            elif isinstance(
+                documents_found,
+                list,
+            ):
+
+                retrieved_documents = (
+                    documents_found
+                )
+
+            else:
+
+                retrieved_documents = []
+
+
+            # =================================================
+            # NORMALIZE METADATA RESULTS
+            # =================================================
+
+            if (
+                metadatas_found
+                and isinstance(
+                    metadatas_found[0],
+                    list,
+                )
+            ):
+
+                retrieved_metadatas = (
+                    metadatas_found[0]
+                )
+
+            elif isinstance(
+                metadatas_found,
+                list,
+            ):
+
+                retrieved_metadatas = (
+                    metadatas_found
+                )
+
+            else:
+
+                retrieved_metadatas = []
+
+
+            # =================================================
+            # REMOVE EMPTY DOCUMENTS
+            # =================================================
+
+            cleaned_documents = []
+            cleaned_metadatas = []
+
+            for index, document in enumerate(
+                retrieved_documents
+            ):
+
+                if not document:
+                    continue
+
+                document = str(
+                    document
+                ).strip()
+
+                if not document:
+                    continue
+
+                cleaned_documents.append(
+                    document
+                )
+
+                if index < len(
+                    retrieved_metadatas
+                ):
+
+                    metadata = (
+                        retrieved_metadatas[index]
+                        or {}
+                    )
+
+                else:
+
+                    metadata = {}
+
+                cleaned_metadatas.append(
+                    metadata
+                )
+
+
             retrieved_documents = (
-                documents_found[0]
-                if documents_found
-                else []
+                cleaned_documents
             )
 
             retrieved_metadatas = (
-                metadatas_found[0]
-                if metadatas_found
-                else []
+                cleaned_metadatas
             )
 
-            if not retrieved_documents:
 
-                answer = (
-                    "I couldn't find relevant "
-                    "information in the provided "
-                    "documents."
-                )
+            # =================================================
+            # BUILD CONTEXT
+            # =================================================
 
-                sources = []
+            context = ""
+            sources = []
 
-            else:
+
+            if retrieved_documents:
 
                 context_parts = []
 
@@ -1115,42 +1613,104 @@ CONTENT:
 """
                     )
 
-                # Keep the prompt compact for faster Gemini responses.
-                context = "\n\n".join(context_parts)
-                MAX_CONTEXT_CHARS = 12000
+
+                context = "\n\n".join(
+                    context_parts
+                ).strip()
+
+
+                # =================================================
+                # LIMIT CONTEXT SIZE
+                # =================================================
+
                 if len(context) > MAX_CONTEXT_CHARS:
-                    context = context[:MAX_CONTEXT_CHARS] + "\n[Context truncated for speed.]"
 
-                with st.spinner("Gemini is generating..."):
-
-
-                    answer = generate_answer(
-                        question,
-                        context,
+                    context = (
+                        context[
+                            :MAX_CONTEXT_CHARS
+                        ]
+                        + "\n\n"
+                        "[Additional retrieved context "
+                        "was truncated for speed.]"
                     )
 
-                sources = []
+
+                # =================================================
+                # UNIQUE SOURCES
+                # =================================================
+
+                seen_sources = set()
 
                 for metadata in (
                     retrieved_metadatas
                 ):
 
-                    if metadata:
+                    if not metadata:
+                        continue
 
-                        sources.append(
-                            {
-                                "filename": metadata.get(
-                                    "filename",
-                                    "Unknown",
-                                ),
-                                "chunk_index": metadata.get(
-                                    "chunk_index",
-                                    "?",
-                                ),
-                            }
-                        )
+                    filename = metadata.get(
+                        "filename",
+                        "Unknown",
+                    )
+
+                    chunk_index = metadata.get(
+                        "chunk_index",
+                        "?",
+                    )
+
+                    source_key = (
+                        str(filename),
+                        str(chunk_index),
+                    )
+
+                    if source_key in seen_sources:
+                        continue
+
+                    seen_sources.add(
+                        source_key
+                    )
+
+                    sources.append(
+                        {
+                            "filename": filename,
+                            "chunk_index": chunk_index,
+                        }
+                    )
+
+
+            # =================================================
+            # GENERATE ANSWER
+            # =================================================
+
+            provider_display = (
+                PROVIDER_LABELS.get(
+                    provider,
+                    provider,
+                )
+            )
+
+            with st.spinner(
+                f"{provider_display} is generating..."
+            ):
+
+                answer = generate_answer(
+                    question,
+                    context,
+                    conversation_context,
+                    answer_mode,
+                )
+
+
+            # =================================================
+            # COUNT QUESTION
+            # =================================================
 
             st.session_state.questions_count += 1
+
+
+            # =================================================
+            # SAVE ASSISTANT ANSWER
+            # =================================================
 
             st.session_state.chat_history.append(
                 {
@@ -1159,6 +1719,7 @@ CONTENT:
                     "sources": sources,
                 }
             )
+
 
         except Exception as error:
 
@@ -1174,6 +1735,7 @@ CONTENT:
                 }
             )
 
+
         st.rerun()
 
 
@@ -1183,7 +1745,9 @@ CONTENT:
 
 elif page == "📊 Analytics":
 
-    st.title("📊 Analytics")
+    st.title(
+        "📊 Analytics"
+    )
 
     st.write(
         "Overview of your DocuMind workspace."
@@ -1191,7 +1755,9 @@ elif page == "📊 Analytics":
 
     st.divider()
 
-    documents = list_documents(WORKSPACE_ID)
+    documents = list_documents(
+        WORKSPACE_ID
+    )
 
     col1, col2, col3 = st.columns(3)
 
@@ -1206,7 +1772,9 @@ elif page == "📊 Analytics":
 
         st.metric(
             "Indexed Chunks",
-            get_document_count(WORKSPACE_ID),
+            get_document_count(
+                WORKSPACE_ID
+            ),
         )
 
     with col3:
@@ -1218,7 +1786,9 @@ elif page == "📊 Analytics":
 
     st.divider()
 
-    st.subheader("📄 Documents")
+    st.subheader(
+        "📄 Documents"
+    )
 
     if documents:
 
@@ -1231,7 +1801,8 @@ elif page == "📊 Analytics":
                 )
 
                 st.caption(
-                    f"{document['chunks']} indexed chunks"
+                    f"{document['chunks']} "
+                    "indexed chunks"
                 )
 
     else:
@@ -1247,64 +1818,177 @@ elif page == "📊 Analytics":
 
 elif page == "⚙️ Settings":
 
-    st.title("⚙️ Settings")
-    st.write("DocuMind configuration and workspace information.")
+    st.title(
+        "⚙️ Settings"
+    )
+
+    st.write(
+        "DocuMind configuration and workspace information."
+    )
+
     st.divider()
 
-    st.subheader("👤 Workspace")
-    st.write(f"Name: **{USER_NAME}**")
-    st.write(f"Workspace ID: `{WORKSPACE_ID}`")
+
+    # =====================================================
+    # WORKSPACE
+    # =====================================================
+
+    st.subheader(
+        "👤 Workspace"
+    )
+
+    st.write(
+        f"Name: **{USER_NAME}**"
+    )
+
+    st.write(
+        f"Workspace ID: `{WORKSPACE_ID}`"
+    )
+
     st.caption(
-        "Your Workspace ID is the key used to reopen this workspace. "
-        "Anyone who knows it can open the workspace, so keep it private."
+        "Your Workspace ID is the key used to reopen "
+        "this workspace. Anyone who knows it can open "
+        "the workspace, so keep it private."
     )
 
-    st.divider()
-    st.subheader("🤖 AI")
-    st.success("Gemini")
-    st.caption("Gemini is the only AI generation provider used by DocuMind.")
+
+    # =====================================================
+    # AI PROVIDERS
+    # =====================================================
 
     st.divider()
-    st.subheader("📦 Limits")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Maximum file size", f"{MAX_FILE_MB} MB")
-    with col2:
-        st.metric("Maximum files", MAX_FILES)
 
-    st.divider()
-    st.subheader("🔐 API Security")
+    st.subheader(
+        "🤖 AI Providers"
+    )
+
     st.info(
-        "Keep GEMINI_API_KEY inside Streamlit Secrets. "
-        "Never commit your API key to GitHub."
+        "DocuMind supports Smart AI, Local AI with "
+        "Llama 3.2, and OpenRouter Free."
     )
 
-    st.divider()
-    st.subheader("🚪 Session")
+    st.write(
+        f"Current provider: "
+        f"**{PROVIDER_LABELS.get(provider, provider)}**"
+    )
 
-    if st.button("🚪 Logout", use_container_width=True):
+    st.write(
+        f"Current answer mode: "
+        f"**{ANSWER_MODE_LABELS.get(answer_mode, answer_mode)}**"
+    )
+
+    st.caption(
+        "Smart AI tries OpenRouter first and "
+        "falls back to local Llama 3.2 if "
+        "OpenRouter is unavailable."
+    )
+
+
+    # =====================================================
+    # LIMITS
+    # =====================================================
+
+    st.divider()
+
+    st.subheader(
+        "📦 Limits"
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        st.metric(
+            "Maximum file size",
+            f"{MAX_FILE_MB} MB",
+        )
+
+    with col2:
+
+        st.metric(
+            "Maximum files",
+            MAX_FILES,
+        )
+
+
+    # =====================================================
+    # API SECURITY
+    # =====================================================
+
+    st.divider()
+
+    st.subheader(
+        "🔐 API Security"
+    )
+
+    st.info(
+        "Keep GEMINI_API_KEY and OPENROUTER_API_KEY "
+        "inside Streamlit Secrets. Never commit API "
+        "keys to GitHub."
+    )
+
+
+    # =====================================================
+    # SESSION
+    # =====================================================
+
+    st.divider()
+
+    st.subheader(
+        "🚪 Session"
+    )
+
+    if st.button(
+        "🚪 Logout",
+        use_container_width=True,
+    ):
+
         st.session_state.workspace_id = None
         st.session_state.logged_out = True
         st.session_state.chat_history = []
         st.session_state.questions_count = 0
+        st.session_state.ai_provider = PROVIDER_SMART
+        st.session_state.answer_mode = ANSWER_MODE_ADAPTIVE
         st.session_state.extracted_pdf_text = ""
         st.session_state.extracted_pdf_name = ""
+
         st.rerun()
+
 
     if st.button(
         "🧹 Forget this workspace on this browser",
         use_container_width=True,
     ):
+
         forget_workspace()
+
         st.session_state.workspace_id = None
         st.session_state.logged_out = True
         st.session_state.chat_history = []
         st.session_state.questions_count = 0
+        st.session_state.ai_provider = PROVIDER_SMART
+        st.session_state.answer_mode = ANSWER_MODE_ADAPTIVE
         st.session_state.extracted_pdf_text = ""
         st.session_state.extracted_pdf_name = ""
+
         st.rerun()
 
+
+    # =====================================================
+    # ABOUT
+    # =====================================================
+
     st.divider()
-    st.subheader("ℹ️ About")
-    st.write("**DocuMind AI**")
-    st.caption("AI-powered document intelligence and retrieval system.")
+
+    st.subheader(
+        "ℹ️ About"
+    )
+
+    st.write(
+        "**DocuMind AI**"
+    )
+
+    st.caption(
+        "AI-powered document intelligence and "
+        "retrieval system."
+    )

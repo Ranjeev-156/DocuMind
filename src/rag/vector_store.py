@@ -1,5 +1,4 @@
 import json
-from streamlit_js_eval import streamlit_js_eval
 import math
 import re
 import sqlite3
@@ -7,79 +6,61 @@ from collections import Counter
 from pathlib import Path
 
 
-REMEMBER_WORKSPACE_KEY = "documind_remembered_workspace"
+DB_PATH = Path("documind.db")
 
 
 # =========================================================
-# BROWSER WORKSPACE MEMORY
+# SEARCH CONFIGURATION
 # =========================================================
 
-def get_remembered_workspace():
-    """Read the remembered workspace ID from this browser."""
-    try:
-        value = streamlit_js_eval(
-            js_expressions=f"""
-                localStorage.getItem("{REMEMBER_WORKSPACE_KEY}")
-            """,
-            want_output=True,
-            key="read_remembered_workspace",
-        )
-
-        if value and str(value).strip():
-            return str(value).strip()
-
-    except Exception:
-        pass
-
-    return None
-
-
-def remember_workspace(workspace_id):
-    """Save only the workspace ID in this browser."""
-    if not workspace_id:
-        return
-
-    safe_id = (
-        str(workspace_id)
-        .replace("\\", "\\\\")
-        .replace('"', '\\"')
-    )
-
-    try:
-        streamlit_js_eval(
-            js_expressions=f"""
-                localStorage.setItem(
-                    "{REMEMBER_WORKSPACE_KEY}",
-                    "{safe_id}"
-                );
-            """,
-            want_output=False,
-            key="save_remembered_workspace",
-        )
-    except Exception:
-        pass
-
-
-def forget_workspace():
-    """Remove the remembered workspace from this browser."""
-    try:
-        streamlit_js_eval(
-            js_expressions=f"""
-                localStorage.removeItem("{REMEMBER_WORKSPACE_KEY}");
-            """,
-            want_output=False,
-            key="remove_remembered_workspace",
-        )
-    except Exception:
-        pass
+STOP_WORDS = {
+    "what",
+    "is",
+    "are",
+    "was",
+    "were",
+    "the",
+    "a",
+    "an",
+    "of",
+    "to",
+    "in",
+    "on",
+    "for",
+    "and",
+    "or",
+    "how",
+    "why",
+    "when",
+    "where",
+    "who",
+    "which",
+    "can",
+    "could",
+    "does",
+    "do",
+    "did",
+    "explain",
+    "tell",
+    "me",
+    "about",
+    "give",
+    "show",
+    "please",
+    "write",
+    "make",
+    "create",
+    "notes",
+    "note",
+    "exam",
+    "ready",
+    "based",
+}
 
 
 # =========================================================
 # DATABASE
 # =========================================================
-
-DB_PATH = Path("documind.db")
-
 
 def get_connection():
     connection = sqlite3.connect(DB_PATH)
@@ -120,25 +101,40 @@ initialize_database()
 
 
 # =========================================================
-# TEXT PROCESSING
+# TEXT NORMALIZATION
 # =========================================================
 
-def _tokenize(text: str):
+def _tokenize(text: str) -> list[str]:
     """
-    Convert text into lowercase word tokens.
+    Convert text into normalized word tokens.
+    """
 
-    Example:
-        "What is Motion?"
-        -> ["what", "is", "motion"]
-    """
+    if not text:
+        return []
+
     return re.findall(
-        r"\b[a-zA-Z0-9_]+\b",
-        text.lower(),
+        r"\b[a-zA-Z0-9]+\b",
+        str(text).lower(),
     )
 
 
-def _normalize_text(text: str):
-    """Normalize text for phrase/substring matching."""
+def _important_tokens(text: str) -> list[str]:
+    """
+    Remove common question/instruction words so that
+    important subject terms receive more weight.
+    """
+
+    tokens = _tokenize(text)
+
+    return [
+        token
+        for token in tokens
+        if token not in STOP_WORDS
+    ]
+
+
+def _normalize_text(text: str) -> str:
+
     return re.sub(
         r"\s+",
         " ",
@@ -146,157 +142,14 @@ def _normalize_text(text: str):
     )
 
 
-def _calculate_idf(documents):
-
-    total_documents = len(documents)
-
-    if total_documents == 0:
-        return {}
-
-    document_frequency = Counter()
-
-    for document in documents:
-
-        tokens = set(_tokenize(document))
-
-        for token in tokens:
-            document_frequency[token] += 1
-
-    idf = {}
-
-    for token, frequency in document_frequency.items():
-
-        idf[token] = (
-            math.log(
-                (1 + total_documents)
-                / (1 + frequency)
-            )
-            + 1
-        )
-
-    return idf
-
-
-def _create_vector(text, idf):
-
-    tokens = _tokenize(text)
-    counts = Counter(tokens)
-
-    vector = {}
-
-    for token, count in counts.items():
-
-        if token in idf:
-
-            vector[token] = (
-                count * idf[token]
-            )
-
-    return vector
-
-
-def _cosine_similarity(vector_a, vector_b):
-
-    if not vector_a or not vector_b:
-        return 0.0
-
-    common = (
-        set(vector_a)
-        & set(vector_b)
-    )
-
-    dot_product = sum(
-        vector_a[token]
-        * vector_b[token]
-        for token in common
-    )
-
-    magnitude_a = math.sqrt(
-        sum(
-            value ** 2
-            for value in vector_a.values()
-        )
-    )
-
-    magnitude_b = math.sqrt(
-        sum(
-            value ** 2
-            for value in vector_b.values()
-        )
-    )
-
-    if magnitude_a == 0 or magnitude_b == 0:
-        return 0.0
-
-    return dot_product / (
-        magnitude_a * magnitude_b
-    )
-
-
 # =========================================================
-# HYBRID RETRIEVAL
+# PHRASE MATCHING
 # =========================================================
 
-def _calculate_lexical_score(query, document):
-    """
-    Calculate how strongly the document matches
-    the actual words in the user's question.
-    """
-
-    query_tokens = _tokenize(query)
-
-    if not query_tokens:
-        return 0.0
-
-    document_tokens = set(
-        _tokenize(document)
-    )
-
-    matched_tokens = [
-        token
-        for token in query_tokens
-        if token in document_tokens
-    ]
-
-    if not matched_tokens:
-        return 0.0
-
-    # Remove duplicate query words.
-    unique_query_tokens = set(query_tokens)
-    unique_matched_tokens = set(matched_tokens)
-
-    coverage = (
-        len(unique_matched_tokens)
-        / len(unique_query_tokens)
-    )
-
-    # Stronger boost when the important query word
-    # appears multiple times in the document.
-    document_counter = Counter(
-        _tokenize(document)
-    )
-
-    frequency_bonus = 0.0
-
-    for token in unique_matched_tokens:
-        frequency = document_counter[token]
-
-        if frequency >= 5:
-            frequency_bonus += 0.10
-        elif frequency >= 2:
-            frequency_bonus += 0.05
-
-    return min(
-        1.0,
-        coverage + frequency_bonus,
-    )
-
-
-def _calculate_phrase_score(query, document):
-    """
-    Detect exact multi-word phrases and single-word
-    phrase presence.
-    """
+def _phrase_score(
+    query: str,
+    document: str,
+) -> float:
 
     normalized_query = _normalize_text(query)
     normalized_document = _normalize_text(document)
@@ -304,142 +157,303 @@ def _calculate_phrase_score(query, document):
     if not normalized_query:
         return 0.0
 
-    # Exact complete query.
+    # Exact full query
     if normalized_query in normalized_document:
         return 1.0
 
-    query_tokens = _tokenize(query)
+    important = _important_tokens(query)
+
+    if not important:
+        important = _tokenize(query)
+
+    if not important:
+        return 0.0
+
+    # Check consecutive important words
+    if len(important) >= 2:
+
+        phrase = " ".join(important)
+
+        if phrase in normalized_document:
+            return 0.95
+
+    # Score individual important terms
+    matches = 0
+
+    for token in important:
+
+        if re.search(
+            rf"\b{re.escape(token)}\b",
+            normalized_document,
+        ):
+            matches += 1
+
+    return matches / len(important)
+
+
+# =========================================================
+# BM25
+# =========================================================
+
+def _build_statistics(documents):
+
+    tokenized = [
+        _tokenize(document)
+        for document in documents
+    ]
+
+    document_frequency = Counter()
+
+    for tokens in tokenized:
+
+        for token in set(tokens):
+            document_frequency[token] += 1
+
+    total_documents = len(documents)
+
+    average_length = (
+        sum(len(tokens) for tokens in tokenized)
+        / total_documents
+        if total_documents
+        else 0
+    )
+
+    return (
+        tokenized,
+        document_frequency,
+        average_length,
+    )
+
+
+def _bm25_score(
+    query_tokens,
+    document_tokens,
+    document_frequency,
+    total_documents,
+    average_length,
+):
+    """
+    Lightweight BM25-style ranking.
+    """
+
+    if not query_tokens or not document_tokens:
+        return 0.0
+
+    k1 = 1.5
+    b = 0.75
+
+    document_length = len(document_tokens)
+
+    frequencies = Counter(document_tokens)
+
+    score = 0.0
+
+    for token in query_tokens:
+
+        if token not in frequencies:
+            continue
+
+        df = document_frequency.get(
+            token,
+            0,
+        )
+
+        if df == 0:
+            continue
+
+        idf = math.log(
+            1
+            + (
+                total_documents
+                - df
+                + 0.5
+            )
+            / (
+                df
+                + 0.5
+            )
+        )
+
+        tf = frequencies[token]
+
+        denominator = (
+            tf
+            + k1
+            * (
+                1
+                - b
+                + b
+                * (
+                    document_length
+                    / max(
+                        average_length,
+                        1,
+                    )
+                )
+            )
+        )
+
+        score += (
+            idf
+            * (
+                tf
+                * (k1 + 1)
+                / denominator
+            )
+        )
+
+    return score
+
+
+# =========================================================
+# TERM COVERAGE
+# =========================================================
+
+def _term_coverage(
+    query_tokens,
+    document_tokens,
+):
+    """
+    Measures how many important query terms occur
+    in the document.
+    """
 
     if not query_tokens:
         return 0.0
 
-    # For short questions such as:
-    # "what is motion"
-    #
-    # the meaningful content word "motion" should still
-    # receive a useful score.
-    meaningful_tokens = [
-        token
-        for token in query_tokens
-        if token not in {
-            "what",
-            "is",
-            "are",
-            "was",
-            "were",
-            "the",
-            "a",
-            "an",
-            "of",
-            "to",
-            "in",
-            "on",
-            "for",
-            "and",
-            "or",
-            "how",
-            "why",
-            "when",
-            "where",
-            "who",
-            "which",
-            "can",
-            "could",
-            "does",
-            "do",
-        }
-    ]
-
-    if not meaningful_tokens:
-        meaningful_tokens = query_tokens
+    document_set = set(document_tokens)
 
     matches = sum(
         1
-        for token in meaningful_tokens
-        if token in normalized_document
+        for token in query_tokens
+        if token in document_set
     )
 
-    return matches / len(meaningful_tokens)
+    return matches / len(
+        set(query_tokens)
+    )
 
 
-def _calculate_hybrid_score(
-    query,
-    document,
-    cosine_score,
+# =========================================================
+# EXACT TERM BOOST
+# =========================================================
+
+def _exact_term_boost(
+    query_tokens,
+    document_tokens,
 ):
     """
-    Combine semantic-ish TF-IDF similarity with
-    exact lexical and phrase matching.
-
-    This is intentionally lightweight and runs locally.
+    Give additional weight when important subject terms
+    occur in the retrieved chunk.
     """
 
-    lexical_score = _calculate_lexical_score(
+    if not query_tokens:
+        return 0.0
+
+    document_set = set(document_tokens)
+
+    matched = (
+        set(query_tokens)
+        & document_set
+    )
+
+    if not matched:
+        return 0.0
+
+    boost = 0.0
+
+    for token in matched:
+
+        count = document_tokens.count(token)
+
+        if count >= 5:
+            boost += 0.08
+
+        elif count >= 2:
+            boost += 0.04
+
+        else:
+            boost += 0.02
+
+    return min(
+        0.20,
+        boost,
+    )
+
+
+# =========================================================
+# FINAL SCORE
+# =========================================================
+
+def _calculate_score(
+    query,
+    document,
+    filename,
+    bm25,
+    average_bm25,
+):
+    """
+    Combine multiple local retrieval signals.
+    """
+
+    query_tokens = _important_tokens(query)
+
+    if not query_tokens:
+        query_tokens = _tokenize(query)
+
+    document_tokens = _tokenize(document)
+
+    coverage = _term_coverage(
+        query_tokens,
+        document_tokens,
+    )
+
+    phrase = _phrase_score(
         query,
         document,
     )
 
-    phrase_score = _calculate_phrase_score(
-        query,
-        document,
+    exact_boost = _exact_term_boost(
+        query_tokens,
+        document_tokens,
     )
 
-    # Main score.
-    #
-    # Cosine handles general word similarity.
-    # Lexical matching protects exact terms.
-    # Phrase matching makes short questions much stronger.
+    filename_tokens = set(
+        _tokenize(filename)
+    )
+
+    filename_matches = (
+        set(query_tokens)
+        & filename_tokens
+    )
+
+    filename_boost = min(
+        0.15,
+        len(filename_matches) * 0.05,
+    )
+
+    normalized_bm25 = 0.0
+
+    if average_bm25 > 0:
+        normalized_bm25 = min(
+            1.0,
+            bm25 / (
+                average_bm25 * 2
+            ),
+        )
+
     score = (
-        (cosine_score * 0.50)
-        + (lexical_score * 0.30)
-        + (phrase_score * 0.20)
+        normalized_bm25 * 0.45
+        + coverage * 0.25
+        + phrase * 0.20
+        + exact_boost
+        + filename_boost
     )
 
-    # Strong protection for exact meaningful terms.
-    query_tokens = set(_tokenize(query))
-    document_tokens = set(_tokenize(document))
-
-    stop_words = {
-        "what",
-        "is",
-        "are",
-        "was",
-        "were",
-        "the",
-        "a",
-        "an",
-        "of",
-        "to",
-        "in",
-        "on",
-        "for",
-        "and",
-        "or",
-        "how",
-        "why",
-        "when",
-        "where",
-        "who",
-        "which",
-        "can",
-        "could",
-        "does",
-        "do",
-    }
-
-    important_query_tokens = (
-        query_tokens - stop_words
+    return min(
+        1.0,
+        score,
     )
-
-    exact_important_matches = (
-        important_query_tokens
-        & document_tokens
-    )
-
-    if exact_important_matches:
-        score += 0.15
-
-    return min(1.0, score)
 
 
 # =========================================================
@@ -516,7 +530,7 @@ def add_documents(
 def search_documents(
     workspace_id,
     query,
-    n_results=3,
+    n_results=6,
 ):
 
     if not query or not query.strip():
@@ -558,45 +572,64 @@ def search_documents(
         for row in rows
     ]
 
-    idf = _calculate_idf(
+    (
+        tokenized_documents,
+        document_frequency,
+        average_length,
+    ) = _build_statistics(
         all_documents
     )
 
-    query_vector = _create_vector(
-        query,
-        idf,
-    )
+    total_documents = len(rows)
+
+    query_tokens = _important_tokens(query)
+
+    if not query_tokens:
+        query_tokens = _tokenize(query)
 
     scored = []
 
-    for row in rows:
+    raw_bm25_scores = []
+
+    # -----------------------------------------------------
+    # Calculate BM25 first
+    # -----------------------------------------------------
+
+    for index, row in enumerate(rows):
+
+        score = _bm25_score(
+            query_tokens,
+            tokenized_documents[index],
+            document_frequency,
+            total_documents,
+            average_length,
+        )
+
+        raw_bm25_scores.append(score)
+
+    average_bm25 = (
+        sum(raw_bm25_scores)
+        / len(raw_bm25_scores)
+        if raw_bm25_scores
+        else 0.0
+    )
+
+    # -----------------------------------------------------
+    # Calculate final ranking
+    # -----------------------------------------------------
+
+    for index, row in enumerate(rows):
 
         content = row["content"]
 
-        document_vector = _create_vector(
-            content,
-            idf,
-        )
+        bm25 = raw_bm25_scores[index]
 
-        cosine_score = _cosine_similarity(
-            query_vector,
-            document_vector,
-        )
-
-        lexical_score = _calculate_lexical_score(
-            query,
-            content,
-        )
-
-        phrase_score = _calculate_phrase_score(
-            query,
-            content,
-        )
-
-        hybrid_score = _calculate_hybrid_score(
-            query,
-            content,
-            cosine_score,
+        score = _calculate_score(
+            query=query,
+            document=content,
+            filename=row["filename"],
+            bm25=bm25,
+            average_bm25=average_bm25,
         )
 
         metadata = {}
@@ -613,42 +646,73 @@ def search_documents(
 
         scored.append(
             {
-                "score": hybrid_score,
-                "cosine": cosine_score,
-                "lexical": lexical_score,
-                "phrase": phrase_score,
+                "score": score,
+                "bm25": bm25,
                 "content": content,
                 "metadata": metadata,
+                "filename": row["filename"],
+                "chunk_index": row["chunk_index"],
             }
         )
 
-    # Highest hybrid score first.
+    # -----------------------------------------------------
+    # Sort strongest first
+    # -----------------------------------------------------
+
     scored.sort(
         key=lambda item: item["score"],
         reverse=True,
     )
 
     # -----------------------------------------------------
-    # RELEVANCE FILTER
+    # Adaptive relevance selection
     # -----------------------------------------------------
-    #
-    # Do NOT simply require cosine > 0.
-    #
-    # A document can be highly relevant because an exact
-    # word appears even when the TF-IDF cosine score is weak.
-    #
-    relevant = [
-        item
-        for item in scored
-        if (
-            item["score"] >= 0.08
-            and (
-                item["cosine"] > 0
-                or item["lexical"] > 0
-                or item["phrase"] > 0
+
+    relevant = []
+
+    for item in scored:
+
+        score = item["score"]
+
+        # Strong results
+        if score >= 0.12:
+            relevant.append(item)
+
+        # Allow exact important-term matches
+        elif (
+            _phrase_score(
+                query,
+                item["content"],
             )
+            >= 0.5
+        ):
+            relevant.append(item)
+
+        if len(relevant) >= n_results:
+            break
+
+    # -----------------------------------------------------
+    # If nothing passed the filter, return top result
+    # when it has at least some lexical evidence.
+    # -----------------------------------------------------
+
+    if not relevant and scored:
+
+        best = scored[0]
+
+        best_tokens = set(
+            _tokenize(best["content"])
         )
-    ][:n_results]
+
+        query_tokens_set = set(
+            _important_tokens(query)
+        )
+
+        if query_tokens_set & best_tokens:
+
+            relevant = [
+                best
+            ]
 
     return {
         "documents": [
