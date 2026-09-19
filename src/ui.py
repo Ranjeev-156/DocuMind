@@ -2,6 +2,8 @@ import streamlit as st
 
 
 def render_sidebar():
+    """Render the main DocuMind navigation sidebar."""
+
     with st.sidebar:
         st.markdown("## 📚 DocuMind AI")
         st.caption("Intelligent Document Analytics")

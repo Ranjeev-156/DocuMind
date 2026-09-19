@@ -3,10 +3,10 @@ from src.rag.vector_store import add_documents
 
 
 def ingest_document(
-    filename: str,
-    text: str,
+    workspace_id,
+    filename,
+    text,
 ):
-    """Clean, chunk, and store a document in ChromaDB."""
 
     chunks = create_chunks(text)
 
@@ -17,9 +17,10 @@ def ingest_document(
     metadatas = []
 
     for index, chunk in enumerate(chunks):
-        chunk_id = f"{filename}-{index}"
 
-        ids.append(chunk_id)
+        ids.append(
+            f"{filename}-{index}"
+        )
 
         metadatas.append(
             {
@@ -29,6 +30,7 @@ def ingest_document(
         )
 
     add_documents(
+        workspace_id=workspace_id,
         ids=ids,
         documents=chunks,
         metadatas=metadatas,

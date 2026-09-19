@@ -1,28 +1,52 @@
-# Virtual environment
-envir/
-
-# Python cache
+# =========================
+# Python
+# =========================
 __pycache__/
-*.py[cod]
+*.pyc
+*.pyo
+*.pyd
 
-# Streamlit secrets
+# =========================
+# Virtual environment
+# =========================
+envir/
+.venv/
+venv/
+
+# =========================
+# Secrets
+# =========================
 .streamlit/secrets.toml
-
-# Environment variables
 .env
-.env.*
 
-# Local databases / vector stores
+# =========================
+# User data
+# =========================
+documind.db
+documind_profile.json
+documind_workspaces.json
+
+# =========================
+# Local vector database
+# =========================
 chroma_db/
+
+# =========================
+# SQLite databases
+# =========================
 *.db
+*.sqlite
+*.sqlite3
 
-# Uploaded/generated files
-uploads/
-data/
-
-# VS Code
+# =========================
+# IDE
+# =========================
 .vscode/
 
-# OS files
+# =========================
+# OS
+# =========================
 .DS_Store
 Thumbs.db
+
+
